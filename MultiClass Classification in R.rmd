@@ -1,0 +1,178 @@
+---
+title: "Classification Using R"
+author: "Ravi Vanam"
+date: "July 13, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+##Hepatic Injury
+This data is taken from "AppliedPredictiveModeling" library
+
+This data set consisted of 281 unique compounds; 
+The response was categorical (either "does not cause injury,""mild injury," or "severe injury") and was highly unbalanced. 
+The predictors consisted of measurements from 184 biological screens and 192 chemical feature predictors. The biological predictors represent activity for each screen and take values between 0and 10 with a mode of 4. 
+
+```{r}
+library(caret)
+library(AppliedPredictiveModeling)
+library(class)
+library(kernlab)
+data(hepatic)
+```
+
+Stratified sampling should be used because of the small number of 'Severe' samples.
+
+```{r}
+set.seed(88)
+hepatic_data <- bio
+hepatic_data$y <- injury
+
+Coded_data <- dummyVars(" ~ .", data = hepatic_data)
+hepatic_dataC <- data.frame(predict(Coded_data, newdata = hepatic_data))
+hepatic_dataC$y <- injury
+
+hepatic_dataC$y.Mild <- as.factor(hepatic_dataC$y.Mild)
+hepatic_dataC$y.None <- as.factor(hepatic_dataC$y.None)
+hepatic_dataC$y.Severe <- as.factor(hepatic_dataC$y.Severe)
+
+hepatic_train_samples <- createDataPartition(hepatic_dataC$y, p = .8)
+#stratified
+hepatic_train_data <- hepatic_dataC[hepatic_train_samples$Resample1, ]
+head(hepatic_train_data)
+
+hepatic_test_data <- hepatic_dataC[-hepatic_train_samples$Resample1, ]
+head(hepatic_test_data)
+```
+I chose Stratified sampling since we have less observations and to ensure balance between train and test set.
+I also did random sampling and observed that the variance is different in train and test sets. So I chose Stratified sampling.
+
+##Logistic Regression##
+```{r, warning = FALSE}
+
+Mild_model <- train(y.Mild ~ .,
+                    data = hepatic_train_data[,-c(186,187,188)],
+                    method="glm", family='binomial')
+Mild_prediction <- predict(Mild_model,newdata = hepatic_test_data[,-c(185:188)],
+                           type = 'prob')
+
+
+```
+
+```{r, warning = FALSE}
+None_model <- train(y.None ~ .,
+                    data = hepatic_train_data[,-c(185,187,188)],
+                    method="glm", family='binomial')
+None_prediction <- predict(None_model,newdata = hepatic_test_data[,-c(185:188)],
+                           type = 'prob')
+```
+
+```{r, warning = FALSE}
+Severe_model <- train(y.Severe ~ .,
+                    data = hepatic_train_data[,-c(185,186,188)],
+                    method="glm", family='binomial')
+Severe_prediction <- predict(Severe_model,newdata = hepatic_test_data[,-c(185:188)],
+                           type = 'prob')
+```
+
+
+```{r}
+PredictedVals <- data.frame(hepatic_test_data$y, Mild_prediction$`1`, None_prediction$`1`, Severe_prediction$`1`)
+
+names(PredictedVals) <- c("injury", "Mild", "None", "Severe")
+```
+
+```{r}
+PredictedVals$Predicted_Injury <- colnames(PredictedVals[,2:4])[apply(PredictedVals[,2:4],1,which.max)]
+```
+
+```{r}
+library(gmodels)
+CrossTable(x = PredictedVals$injury, y = PredictedVals$Predicted_Injury, prop.chisq = F, dnn = c("Actual","Predicted"))
+```
+Accuracy
+```{r}
+log_accuracy <- sum(PredictedVals$injury == PredictedVals$Predicted_Injury)/nrow(PredictedVals)
+log_accuracy
+```
+
+##K-nearest neighbor##
+```{r}
+library(class)
+knn_accuracy_k <- data.frame()
+for (i in 1:20){
+  knn_obj <- knn(train = hepatic_train_data[,-c(185:188)], 
+                 test =hepatic_test_data[,-c(185:188)],
+                 cl = hepatic_train_data$y,
+                 k = i, l = 0, prob = FALSE, use.all = TRUE)
+  
+  knn_accuracy <- sum(knn_obj == hepatic_test_data$y)/length(knn_obj)
+  
+  knn_accuracy_k[i,1] <- i
+  knn_accuracy_k[i,2] <- knn_accuracy
+  
+}
+
+```
+
+```{r}
+library(ggplot2)
+p <- ggplot(knn_accuracy_k, aes(V1, V2))+
+  geom_line()+
+  labs(title = "Accuracy vs k", x = "k", y = "Accuracy")
+p
+```
+
+From the above plot, we can see that the accuracy is maximum when k = 8. So we choose 8 nearest neighbors.
+
+```{r}
+max(knn_accuracy_k$V2)
+knn_accuracy_k[8,]
+```
+
+
+##Support Vector Machines##
+```{r}
+hepatic_train_dataF <- hepatic_train_data[,-c(185,186,187)]
+hepatic_test_dataF <- hepatic_test_data[,-c(185,186,187)]
+SVM_train <- subset(hepatic_train_dataF, y!="Severe")
+SVM_test <- subset(hepatic_test_dataF, y!="Severe")
+#SVM_data <- hepatic_train_data[!hepatic_train_data$y == "Severe", ]
+```
+
+
+
+```{r , comment= FALSE}
+library(kernlab)
+library(caret)
+cost_accuracy <- data.frame()
+kernels <- c("rbfdot","polydot","vanilladot","tanhdot", "laplacedot","besseldot","anovadot")
+
+for ( i in 1:7 ){
+  for (j in 1:10) {
+svm_model <- ksvm(y ~ ., data = SVM_train, type = 'C-svc', kernel = kernels[i], scaled = FALSE, C = j)
+ 
+svm_preds <- predict(svm_model,SVM_test[,-185])
+actual_predicted <- data.frame(SVM_test$y, svm_preds)
+names(actual_predicted) <- c("Injury", "predicted_injury")
+
+svm_accuracy <- sum(actual_predicted$Injury == actual_predicted$predicted_injury)/nrow(actual_predicted)
+
+cost_accuracy[j,i] <- svm_accuracy
+      }
+}
+```
+```{r}
+
+names(cost_accuracy) <- c("rbfdot","polydot","vanilladot","tanhdot", "laplacedot","besseldot","anovadot")
+cost_accuracy
+```
+from the above dataframe we can see that the test set accuracy for different kernal functions and cost parameters.
+Maximum acuuracy is 0.64 for the following kernal functions and cost parameters
+kernal function rbfdot at cost = 2 and 
+laplacedot at cost = 4
